@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Doomzinho 3D Caixa Esconde-Esconde OliveiraIsaias</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: black; }
+    canvas { display: block; cursor: crosshair; }
+    #instructions {
+      color: white;
+      font-family: sans-serif;
+      text-align: center;
+      margin-top: 20px;
+      position: absolute;
+      width: 100%;
+      top: 30px;
+    }
+  </style>
+</head>
+<body>
+  <div id="instructions">Clique para iniciar o controle do mouse</div>
+  <canvas id="game"></canvas>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const map = [
+      "1111111111111111111111111111111111111111111111111111111",
+      "1                      1         1      1         1   1",
+      "1  111  111111  1      1   1     1      1    1        1",
+      "1   1   1       1      1   1     1           1    1   1",
+      "1   1   1  111  1      1   1     1      1    1        1",
+      "1   1   1    1  1      1   1            1         1   1",
+      "1   111 111111  1      1   1     1      1    1        1",
+      "1               1          1     1           1    1   1",
+      "11111111111111111111111111111111111111111111111111111111"
+    ];
+
+    const tileSize = 64;
+    const fov = Math.PI / 3;
+    const numRays = canvas.width;
+    const maxDepth = 1000;
+
+    const player = {
+      x: tileSize * 1.5,
+      y: tileSize * 1.5,
+      angle: 0,
+      z: 0,
+      dy: 0,
+      grounded: true,
+      health: 100
+    };
+
+    const gravity = 0.5;
+    const jumpForce = 10;
+    const keys = {};
+    window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+    const instructions = document.getElementById('instructions');
+    canvas.addEventListener('click', () => {
+      canvas.requestPointerLock();
+      instructions.style.display = 'none';
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement === canvas) {
+        document.addEventListener('mousemove', onMouseMove);
+      } else {
+        document.removeEventListener('mousemove', onMouseMove);
+        instructions.style.display = 'block';
+      }
+    });
+
+    function onMouseMove(e) {
+      const sensitivity = 0.002;
+      player.angle += e.movementX * sensitivity;
+    }
+
+    const wallTexture = new Image();
+    wallTexture.src = 'parede.jpg';
+
+    const gunImage = new Image();
+    gunImage.src = 'arma.png';
+
+    const caixaImage = new Image();
+    caixaImage.src = 'caixa.png'; // Original 2000x2000
+
+    const impactSound = new Audio('impact.mp3');
+
+    function playShortSound(audio, durationMs) {
+      audio.currentTime = 0;
+      audio.play();
+      setTimeout(() => {
+        audio.pause();
+      }, durationMs);
+    }
+
+    let bullet = null;
+    const bulletSpeed = 25;
+
+    let gunYGlobal = 0;
+    let gunHeightGlobal = 0;
+
+    window.addEventListener('mousedown', e => {
+      if (e.button === 0 && !bullet) {
+        const rayAngle = player.angle;
+        const ray = castRay(rayAngle);
+
+        bullet = {
+          distanceTraveled: 0,
+          maxDistance: ray.depth,
+          angle: rayAngle,
+          hit: false
+        };
+
+        playShortSound(impactSound, 1000);
+      }
+    });
+
+    function castRay(rayAngle) {
+      const sin = Math.sin(rayAngle);
+      const cos = Math.cos(rayAngle);
+      for (let depth = 0; depth < maxDepth; depth++) {
+        const targetX = player.x + cos * depth;
+        const targetY = player.y + sin * depth;
+        const col = Math.floor(targetX / tileSize);
+        const row = Math.floor(targetY / tileSize);
+        if (map[row] && map[row][col] === "1") {
+          const dist = depth * Math.cos(rayAngle - player.angle);
+          return { depth: dist, hitX: targetX, hitY: targetY };
+        }
+      }
+      return { depth: maxDepth, hitX: null, hitY: null };
+    }
+
+    function renderBullet() {
+      if (!bullet) return;
+
+      bullet.distanceTraveled += bulletSpeed;
+
+      if (bullet.distanceTraveled >= bullet.maxDistance) {
+        bullet = null;
+      }
+    }
+
+    function isWall(x, y) {
+      const col = Math.floor(x / tileSize);
+      const row = Math.floor(y / tileSize);
+      return map[row] && map[row][col] === "1";
+    }
+
+    function moveWithCollision(dx, dy) {
+      const nextX = player.x + dx;
+      const nextY = player.y + dy;
+      const padding = 10;
+      if (!isWall(nextX + padding, player.y) && !isWall(nextX - padding, player.y)) player.x = nextX;
+      if (!isWall(player.x, nextY + padding) && !isWall(player.x, nextY - padding)) player.y = nextY;
+    }
+
+    const caixa = {
+      size: 160,
+      x: 0,
+      y: 0,
+      radius: 15,
+    };
+
+    function posicionarCaixaAleatoria() {
+      let valid = false;
+      while (!valid) {
+        const minX = tileSize + caixa.size/2;
+        const maxX = (map[0].length - 1) * tileSize - caixa.size/2;
+        const minY = tileSize + caixa.size/2;
+        const maxY = (map.length - 1) * tileSize - caixa.size/2;
+
+        const newX = Math.random() * (maxX - minX) + minX;
+        const newY = Math.random() * (maxY - minY) + minY;
+
+        const corners = [
+          {x: newX - caixa.size/2, y: newY - caixa.size/2},
+          {x: newX + caixa.size/2, y: newY - caixa.size/2},
+          {x: newX - caixa.size/2, y: newY + caixa.size/2},
+          {x: newX + caixa.size/2, y: newY + caixa.size/2},
+        ];
+
+        valid = true;
+        for (const corner of corners) {
+          if (isWall(corner.x, corner.y)) {
+            valid = false;
+            break;
+          }
+        }
+
+        if (valid) {
+          caixa.x = newX;
+          caixa.y = newY;
+          console.log("Caixa posicionada em:", caixa.x, caixa.y);
+        }
+      }
+    }
+
+    // Para garantir que a caixa apareça, fixa posição conhecida (descomente para testar fixo)
+    // caixa.x = tileSize * 5;
+    // caixa.y = tileSize * 5;
+    // console.log("Caixa fixada em:", caixa.x, caixa.y);
+
+    function colisaoPlayerCaixa() {
+      const dx = player.x - caixa.x;
+      const dy = player.y - caixa.y;
+      const distance = Math.hypot(dx, dy);
+      const collisionDistance = 20 + caixa.radius;
+      return distance < collisionDistance;
+    }
+
+    function renderCaixa() {
+      if (!caixaImage.complete) return;
+
+      const dx = caixa.x - player.x;
+      const dy = caixa.y - player.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > maxDepth) return;
+
+      const angleToCaixa = Math.atan2(dy, dx);
+
+      // Verifica se tem parede entre o jogador e a caixa
+      const rayToCaixa = castRay(angleToCaixa);
+      if (rayToCaixa.depth < dist - 10) return; // Não desenha se parede estiver na frente
+
+      const scale = Math.min(1, 400 / dist);
+
+      const spriteWidth = caixa.size * scale;
+      const spriteHeight = caixa.size * scale;
+
+      let angleDiff = angleToCaixa - player.angle;
+      while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+      while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+
+      const screenX = canvas.width / 2 + Math.tan(angleDiff) * 400 - spriteWidth / 2;
+      const screenY = canvas.height - spriteHeight - 40;
+
+      ctx.drawImage(caixaImage, screenX, screenY, spriteWidth, spriteHeight);
+    }
+
+    let colisaoAnterior = false;
+
+    function movePlayer() {
+      let speed = 3;
+      if (keys["shift"] || keys["shiftleft"] || keys["shiftright"]) {
+        speed *= 2; // Corrida: 2x velocidade
+      }
+      
+      const angle = player.angle;
+      let dx = 0, dy = 0;
+      if (keys["w"] || keys["arrowup"]) { dx += Math.cos(angle) * speed; dy += Math.sin(angle) * speed; }
+      if (keys["s"] || keys["arrowdown"]) { dx -= Math.cos(angle) * speed; dy -= Math.sin(angle) * speed; }
+      if (keys["a"] || keys["arrowleft"]) { dx += Math.cos(angle - Math.PI / 2) * speed; dy += Math.sin(angle - Math.PI / 2) * speed; }
+      if (keys["d"] || keys["arrowright"]) { dx += Math.cos(angle + Math.PI / 2) * speed; dy += Math.sin(angle + Math.PI / 2) * speed; }
+
+      moveWithCollision(dx, dy);
+
+      if ((keys[" "] || keys["space"]) && player.grounded) {
+        player.dy = jumpForce;
+        player.grounded = false;
+      }
+
+      player.dy -= gravity;
+      player.z += player.dy;
+
+      if (player.z <= 0) {
+        player.z = 0;
+        player.dy = 0;
+        player.grounded = true;
+      }
+
+      const colisaoAtual = colisaoPlayerCaixa();
+
+      if (colisaoAtual && !colisaoAnterior) {
+        posicionarCaixaAleatoria();
+      }
+
+      colisaoAnterior = colisaoAtual;
+    }
+
+    function gameLoop() {
+      movePlayer();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      renderScene();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function renderScene() {
+      if (!wallTexture.complete) return;
+
+      const minDistance = 30;
+
+      for (let i = 0; i < numRays; i++) {
+        const rayAngle = (player.angle - fov / 2) + (i / numRays) * fov;
+        const ray = castRay(rayAngle);
+        const safeDepth = Math.max(ray.depth, minDistance);
+        const wallHeight = Math.min(canvas.height, tileSize * 800 / safeDepth);
+
+        let textureX = 0;
+        if (ray.hitX && ray.hitY) {
+          const offsetX = ray.hitX % tileSize;
+          const offsetY = ray.hitY % tileSize;
+
+          if (Math.abs(offsetX - tileSize / 2) > Math.abs(offsetY - tileSize / 2)) {
+            textureX = offsetY;
+          } else {
+            textureX = offsetX;
+          }
+
+          textureX = Math.floor((textureX / tileSize) * wallTexture.width);
+        }
+
+        ctx.drawImage(
+          wallTexture,
+          textureX, 0, 1, wallTexture.height,
+          i, canvas.height / 2 - wallHeight / 2 + player.z,
+          1, wallHeight
+        );
+
+        const maxShade = 0.6;
+        const shadeFactor = Math.min(ray.depth / 300, maxShade);
+        ctx.fillStyle = `rgba(0, 0, 0, ${shadeFactor})`;
+        ctx.fillRect(i, canvas.height / 2 - wallHeight / 2 + player.z, 1, wallHeight);
+
+        ctx.fillStyle = '#555';
+        ctx.fillRect(i, 0, 1, canvas.height / 2 - wallHeight / 2 + player.z);
+        ctx.fillStyle = '#222';
+        ctx.fillRect(i, canvas.height / 2 + wallHeight / 2 + player.z, 1, canvas.height / 2 - wallHeight / 2 - player.z);
+      }
+
+      renderCaixa();
+
+      if (gunImage.complete) {
+        const gunWidth = canvas.width / 4;
+        const gunHeight = gunImage.height * (gunWidth / gunImage.width);
+        const gunX = (canvas.width - gunWidth) / 2;
+        const gunY = canvas.height - gunHeight - 20 + 38;
+
+        gunYGlobal = gunY;
+        gunHeightGlobal = gunHeight;
+
+        ctx.drawImage(gunImage, gunX, gunY, gunWidth, gunHeight);
+      }
+
+      renderBullet();
+    }
+
+    wallTexture.onload = () => {
+      gunImage.onload = () => {
+        caixaImage.onload = () => {
+          posicionarCaixaAleatoria();
+          gameLoop();
+        };
+      };
+    };
+  </script>
+</body>
+</html>
